@@ -5,19 +5,29 @@
 
 import json
 import numpy as np
-import matplotlib.pyplot as plt
 
 from scipy.stats import multivariate_normal
 from sklearn.metrics import f1_score
 from os import listdir
 from os.path import isfile, join
+import sys
+from sklearn import preprocessing
+from sklearn.ensemble import IsolationForest
+from sklearn.neighbors import LocalOutlierFactor
+from sklearn.svm import OneClassSVM
 
 # <codecell>
 
-def featuresFromKeyPressTimings(timings):
-    return [np.min(timings), np.mean(timings), np.max(timings), np.std(timings)]
+def featuresFromKeyPressTimings(timings, raw = False):
+    if raw == False:
+        return [np.mean(timings), np.max(timings), 1+np.std(timings)]
+    else:
+        paddedTimings = [0]*20
+        for i in range(min(19,len(timings))):
+            paddedTimings[i] = timings[i]
+        return paddedTimings
 
-def featuresFromMouseMovements(mouseMovements):
+def featuresFromMouseMovements(mouseMovements, raw = False):
     speeds = []
     prevSlope = 0
     curvatures = []
@@ -32,8 +42,20 @@ def featuresFromMouseMovements(mouseMovements):
         curvature = (slope - prevSlope)/delta_x
         curvatures.append(curvature)
         prevSlope = slope
-    return [np.min(speeds), np.mean(speeds), np.max(speeds), np.std(speeds),
-            np.min(curvatures), np.mean(curvatures), np.max(curvatures), np.std(curvatures)]
+    if raw == False:
+        return [np.mean(speeds), np.max(speeds), np.std(speeds),
+            np.mean(curvatures), np.max(curvatures), np.std(curvatures)]
+    else:
+        paddedSpeeds = [0]*100
+        for i in range(min(19,len(speeds))):
+            paddedSpeeds[i] = speeds[i]
+        paddedCurvatures = [0]*100
+        for i in range(min(19,len(curvatures))):
+            paddedCurvatures[i] = curvatures[i]
+        featureVector = []
+        featureVector.extend(paddedSpeeds)
+        featureVector.extend(paddedCurvatures)
+        return featureVector
 
 def getFeatureVector(jsonData):
     featureVector = []
@@ -41,7 +63,7 @@ def getFeatureVector(jsonData):
     featureVector.extend(featuresFromKeyPressTimings(jsonObject['usernameTimings']))
     featureVector.extend(featuresFromMouseMovements(jsonObject['mousePositions']))
     featureVector.extend(featuresFromKeyPressTimings(jsonObject.get('emailIDTimings', [0, 0])))
-    return featureVector
+    return np.nan_to_num(featureVector)
 
 def read_dataset(directory):
     dataset = None
@@ -72,7 +94,7 @@ def multivariateGaussian(dataset,mu,sigma):
     p = multivariate_normal(mean=mu, cov=sigma, allow_singular=True)
     return p.pdf(dataset)
 
-# <codecell>
+# # <codecell>
 
 def selectThresholdByCV(probs,gt):
     best_epsilon = 0
@@ -88,7 +110,7 @@ def selectThresholdByCV(probs,gt):
             best_epsilon = epsilon
     return best_f1, best_epsilon
 
-# <codecell>
+# # <codecell>
 
 tr_path=sys.argv[1]
 cv_path=sys.argv[2]
@@ -96,28 +118,36 @@ bot_path=sys.argv[3]
 
 tr_data = read_dataset(tr_path)   #training data dir
 cv_data = read_dataset(cv_path)   #cross validation data dir
+bot_data = read_dataset(bot_path)
+
+scaler = preprocessing.StandardScaler().fit(tr_data)
+
+tr_data = scaler.transform(tr_data)
+cv_data = scaler.transform(cv_data)
+bot_data = scaler.transform(bot_data)
+
 #Hard coded for testing. will change
-gt_data = [1]*9 + [0]*4
-print(gt_data)
+gt_data = [+1]*23
 
-mu, sigma = estimateGaussian(tr_data)
-p = multivariateGaussian(tr_data,mu,sigma)
+# Outlier detection code using multi variate gaussian
 
-p_cv = multivariateGaussian(cv_data,mu,sigma)
-fscore, ep = selectThresholdByCV(p_cv,gt_data)
+# mu, sigma = estimateGaussian(tr_data)
+# p = multivariateGaussian(tr_data,mu,sigma)
+# p_cv = multivariateGaussian(cv_data,mu,sigma)
+# fscore, ep = selectThresholdByCV(p_cv,gt_data)
+# mu, sigma = estimateGaussian(bot_data)
+# p_bot = multivariateGaussian(bot_data,mu,sigma)
 
-bot_data = read_dataset(bot_data)
-mu, sigma = estimateGaussian(bot_data)
-p_bot = multivariateGaussian(bot_data,mu,sigma)
+# outliers = p_bot < ep
 
-print(p_bot)
-print(ep)
-outliers = p_bot < ep
-
+# print (outliers)
 # <codecell>
 
-print (tr_data)
-print (outliers)
-# <codecell>
+# Novelty detection using one class SVM
 
+outlierDetector = OneClassSVM()
+outlierDetector.fit(cv_data, gt_data)
 
+bot_preds = outlierDetector.predict(bot_data)
+
+print(bot_preds)
